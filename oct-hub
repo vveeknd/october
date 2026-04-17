@@ -1,1 +1,678 @@
+-- ============================================================
+-- OCTOBER HUB | Summon Heroes
+-- Rayfield | No Key System | Default Theme
+-- ============================================================
 
+local LP = game:GetService("Players").LocalPlayer
+pcall(function() LP:WaitForChild("PlayerGui").ScreenInsets = Enum.ScreenInsets.None end)
+
+local Rayfield    = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Players     = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local RS          = game:GetService("ReplicatedStorage")
+local RunService  = game:GetService("RunService")
+local VIM         = game:GetService("VirtualInputManager")
+
+-- ============================================================
+-- WAIT FOR LOAD
+-- ============================================================
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(3)
+
+local PlayerGui   = LP:WaitForChild("PlayerGui", 30)
+local profile     = PlayerGui:WaitForChild("Profile", 30)
+local currencies  = profile:WaitForChild("Currencies", 30)
+local equipped    = profile:WaitForChild("Equipped", 30)
+local items       = profile:WaitForChild("Inventory", 30):WaitForChild("Items", 30)
+local leaderstats = LP:WaitForChild("leaderstats", 30)
+local Systems     = RS:WaitForChild("Systems", 30)
+local gameOver    = Systems:WaitForChild("EndlessWaves", 30):WaitForChild("GameOver", 30)
+
+-- ============================================================
+-- WEBHOOK CONFIG
+-- ============================================================
+local WEBHOOK_URL   = "YOUR_WEBHOOK_URL_HERE"
+local AUTO_RETRY    = false
+local ANTI_AFK      = false
+local webhookActive = false
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+local function getItemCount(name)
+    local f = items:FindFirstChild(name)
+    return f and #f:GetChildren() or 0
+end
+
+local function fmtNum(n)
+    local s = tostring(math.abs(math.floor(n)))
+    local result, count = "", 0
+    for i = #s, 1, -1 do
+        count = count + 1
+        result = s:sub(i, i) .. result
+        if count % 3 == 0 and i ~= 1 then result = "," .. result end
+    end
+    return result
+end
+
+local function fmtDiff(diff)
+    local sign = diff >= 0 and "+" or "-"
+    return sign .. fmtNum(math.abs(diff))
+end
+
+local function snapshot()
+    return {
+        coins         = currencies.Coins.Value,
+        gems          = currencies.Gems.Value,
+        level         = leaderstats.Level.Value,
+        xp            = profile:WaitForChild("XP").Value,
+        summonTickets = getItemCount("SummonTicket"),
+        traitRerolls  = getItemCount("TraitReroll"),
+        units         = equipped:GetChildren(),
+    }
+end
+
+local function sendWebhook(before, after, wave, timeStr)
+    local coinDiff   = after.coins         - before.coins
+    local gemDiff    = after.gems          - before.gems
+    local xpDiff     = after.xp            - before.xp
+    local ticketDiff = after.summonTickets - before.summonTickets
+    local rollDiff   = after.traitRerolls  - before.traitRerolls
+
+    local rewardLines = {}
+    if coinDiff   ~= 0 then table.insert(rewardLines, "**" .. fmtDiff(coinDiff)   .. " Coins**") end
+    if gemDiff    ~= 0 then table.insert(rewardLines, "**" .. fmtDiff(gemDiff)    .. " Gems**") end
+    if xpDiff     ~= 0 then table.insert(rewardLines, "**" .. fmtDiff(xpDiff)     .. " Exp**") end
+    if ticketDiff ~= 0 then table.insert(rewardLines, "**" .. fmtDiff(ticketDiff) .. " Summon Tickets**") end
+    if rollDiff   ~= 0 then table.insert(rewardLines, "**" .. fmtDiff(rollDiff)   .. " Trait Rerolls**") end
+    if #rewardLines == 0 then table.insert(rewardLines, "No rewards detected") end
+
+    local unitNames = {}
+    for _, u in ipairs(after.units) do table.insert(unitNames, u.Name) end
+
+    local embed = {
+        title  = "Summon Heroes",
+        color  = 5763719,
+        fields = {
+            { name = "Name",    value = "||" .. LP.Name .. "||",                                                         inline = false },
+            { name = "Result",  value = "Endless Mode - Wave " .. tostring(wave or 0) .. " - Won\n- Time: " .. timeStr, inline = false },
+            { name = "Rewards", value = table.concat(rewardLines, "\n"),                                                  inline = false },
+            { name = "Balance", value = "Coins: " .. fmtNum(after.coins) .. " | Gems: " .. fmtNum(after.gems) .. " | Tickets: " .. after.summonTickets .. " | Trait RR: " .. after.traitRerolls, inline = false },
+            { name = "Units",   value = #unitNames > 0 and table.concat(unitNames, ", ") or "None",                     inline = false },
+        },
+        footer    = { text = "Level " .. after.level .. " | " .. LP.Name },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    pcall(function()
+        request({
+            Url     = WEBHOOK_URL,
+            Method  = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body    = HttpService:JSONEncode({ embeds = { embed } }),
+        })
+    end)
+end
+
+-- ============================================================
+-- ROUND TRACKING
+-- ============================================================
+local roundStart  = os.time()
+local statsBefore = snapshot()
+
+gameOver.OnClientEvent:Connect(function(wave)
+    if not webhookActive then return end
+    local elapsed = os.time() - roundStart
+    local timeStr = string.format("%d:%02d", math.floor(elapsed / 60), elapsed % 60)
+    local statsAfter = snapshot()
+    sendWebhook(statsBefore, statsAfter, wave, timeStr)
+    Rayfield:Notify({ Title = "October Hub", Content = "Webhook sent! Wave " .. tostring(wave), Duration = 4 })
+    roundStart  = os.time()
+    statsBefore = statsAfter
+    if AUTO_RETRY then
+        task.wait(2)
+        pcall(function()
+            Systems:WaitForChild("Voting", 5):WaitForChild("Vote", 5):FireServer("Retry")
+        end)
+    end
+end)
+
+-- ============================================================
+-- ANTI-AFK LOOP
+-- ============================================================
+task.spawn(function()
+    while true do
+        task.wait(60)
+        if ANTI_AFK then
+            pcall(function()
+                VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
+                task.wait(0.05)
+                VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            end)
+        end
+    end
+end)
+
+LP.Idled:Connect(function()
+    if ANTI_AFK then
+        pcall(function()
+            VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
+            task.wait(0.05)
+            VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        end)
+    end
+end)
+
+-- ============================================================
+-- WINDOW
+-- ============================================================
+local Window = Rayfield:CreateWindow({
+    Name            = "October",
+    Icon            = 0,
+    LoadingTitle    = "October Hub",
+    LoadingSubtitle = "Summon Heroes",
+    Theme           = "Default",
+    ToggleUIKeybind = Enum.KeyCode.RightShift,
+    DisableRayfieldPrompts = true,
+    DisableBuildWarnings   = true,
+    ConfigurationSaving = {
+        Enabled    = true,
+        FolderName = "OctoberHub",
+        FileName   = "SummonHeroes",
+    },
+    KeySystem = false,
+})
+
+-- ============================================================
+-- STORY TAB
+-- ============================================================
+
+-- Map data (sourced from WaveData module)
+local MAPS = {
+    { key = "RookieIsland",     title = "Rookie Island",      stages = 3 },
+    { key = "VolcanoFortress",  title = "Volcano Fortress",   stages = 4 },
+    { key = "FrozenGlacier",    title = "Frozen Glacier",     stages = 4 },
+    { key = "CalamityCanyon",   title = "Calamity Canyon",    stages = 4 },
+    { key = "SakuraVillage",    title = "Sakura Village",     stages = 4 },
+    { key = "EvercrestAcademy", title = "Evercrest Academy",  stages = 4 },
+    { key = "LeviathansEye",    title = "Leviathan's Eye",    stages = 5 },
+    { key = "SunsetCity",       title = "Sunset City",        stages = 5 },
+    { key = "SkyCastle",        title = "Aetherwell Citadel", stages = 5 },
+}
+
+local function gemsForPlay(n)
+    return math.max(100 - (n - 1) * 10, 50)
+end
+
+local function getMapByKey(key)
+    for _, m in ipairs(MAPS) do
+        if m.key == key then return m end
+    end
+    return MAPS[1]
+end
+
+local function getMapByTitle(title)
+    for _, m in ipairs(MAPS) do
+        if m.title == title then return m end
+    end
+    return MAPS[1]
+end
+
+local function getHighestUnlocked()
+    local best = MAPS[1]
+    pcall(function()
+        local Profile = require(RS.Systems.Profile)
+        local data = Profile.GetData()
+        if type(data) == "table" and data.Maps then
+            for _, m in ipairs(MAPS) do
+                if data.Maps[m.key] then best = m end
+            end
+        end
+    end)
+    return best
+end
+
+local function joinStory(mapKey, stageNum)
+    local ok, Queue = pcall(require, RS.Systems.Queue)
+    if ok then pcall(function() Queue.JoinStory(mapKey, stageNum) end) end
+    local ok2, Waves = pcall(require, RS.Systems.Waves)
+    if ok2 then pcall(function() Waves.StartStory(mapKey, stageNum) end) end
+end
+
+local function leaveStory()
+    pcall(function() require(RS.Systems.Queue).Leave() end)
+    pcall(function() require(RS.Systems.Waves).Leave() end)
+end
+
+-- Story state
+local ss = {
+    mapKey       = MAPS[1].key,
+    stage        = 1,
+    autoJoin     = false,
+    joinDelay    = 3,
+    useHighest   = false,
+    lastJoin     = 0,
+    farmMaps     = {},
+    farmClears   = 5,
+    autoFarm     = false,
+    farmIdx      = 1,
+    farmCleared  = {},
+    todayPlays   = 0,
+    farmLastJoin = 0,
+}
+
+local mapTitles = {}
+for _, m in ipairs(MAPS) do table.insert(mapTitles, m.title) end
+
+local function stageTitles(mapKey)
+    local m = getMapByKey(mapKey)
+    local t = {}
+    for i = 1, m.stages do table.insert(t, "Stage " .. i) end
+    return t
+end
+
+local Story = Window:CreateTab("Story", "book-open")
+
+Story:CreateSection("Story Mode")
+
+Story:CreateDropdown({
+    Name            = "Story Map",
+    Options         = mapTitles,
+    CurrentOption   = { MAPS[1].title },
+    MultipleOptions = false,
+    Flag            = "StoryMap",
+    Callback        = function(opt)
+        local sel = type(opt) == "table" and opt[1] or opt
+        ss.mapKey = getMapByTitle(sel).key
+        ss.stage  = 1
+    end,
+})
+
+Story:CreateDropdown({
+    Name            = "Story Stage",
+    Options         = stageTitles(ss.mapKey),
+    CurrentOption   = { "Stage 1" },
+    MultipleOptions = false,
+    Flag            = "StoryStage",
+    Callback        = function(opt)
+        local sel = type(opt) == "table" and opt[1] or opt
+        ss.stage = tonumber(sel:match("%d+")) or 1
+    end,
+})
+
+Story:CreateToggle({
+    Name         = "Auto Join Story",
+    CurrentValue = false,
+    Flag         = "AutoJoinStory",
+    Callback     = function(val)
+        ss.autoJoin = val
+        Rayfield:Notify({ Title = "Auto Join Story", Content = val and "Enabled" or "Disabled", Duration = 3 })
+    end,
+})
+
+Story:CreateSlider({
+    Name         = "Story Join Delay (s)",
+    Range        = { 1, 30 },
+    Increment    = 1,
+    CurrentValue = 3,
+    Flag         = "StoryJoinDelay",
+    Callback     = function(val) ss.joinDelay = val end,
+})
+
+Story:CreateToggle({
+    Name         = "Use Highest Unlocked Story",
+    CurrentValue = false,
+    Flag         = "UseHighestStory",
+    Callback     = function(val) ss.useHighest = val end,
+})
+
+Story:CreateButton({
+    Name     = "Join Selected Story Now",
+    Callback = function()
+        local key = ss.useHighest and getHighestUnlocked().key or ss.mapKey
+        joinStory(key, ss.stage)
+        Rayfield:Notify({
+            Title   = "Story",
+            Content = "Joining " .. getMapByKey(key).title .. " Stage " .. ss.stage,
+            Duration = 3,
+        })
+    end,
+})
+
+Story:CreateButton({
+    Name     = "Leave",
+    Callback = function()
+        ss.autoJoin = false
+        ss.autoFarm = false
+        leaveStory()
+        Rayfield:Notify({ Title = "Story", Content = "Left game", Duration = 3 })
+    end,
+})
+
+Story:CreateSection("Multi Story Farm")
+
+Story:CreateLabel("Pick maps, set clears, then toggle Auto Story Gem Farm.")
+Story:CreateLabel("Farms each map to the target, tracking daily gem decay (100→90→80...)")
+
+Story:CreateDropdown({
+    Name            = "Story Farm Maps",
+    Options         = mapTitles,
+    CurrentOption   = {},
+    MultipleOptions = true,
+    Flag            = "StoryFarmMaps",
+    Callback        = function(selected)
+        ss.farmMaps = {}
+        for _, m in ipairs(MAPS) do
+            for _, sel in ipairs(selected) do
+                if m.title == sel then
+                    table.insert(ss.farmMaps, m.key)
+                    break
+                end
+            end
+        end
+    end,
+})
+
+Story:CreateSlider({
+    Name         = "Story Farm Clears",
+    Range        = { 1, 10 },
+    Increment    = 1,
+    CurrentValue = 5,
+    Flag         = "StoryFarmClears",
+    Callback     = function(val) ss.farmClears = val end,
+})
+
+Story:CreateToggle({
+    Name         = "Auto Story Gem Farm",
+    CurrentValue = false,
+    Flag         = "AutoStoryFarm",
+    Callback     = function(val)
+        ss.autoFarm = val
+        if val then
+            ss.farmIdx      = 1
+            ss.farmCleared  = {}
+            ss.todayPlays   = 0
+            ss.farmLastJoin = 0
+        end
+        Rayfield:Notify({ Title = "Story Farm", Content = val and "Farm started!" or "Farm stopped", Duration = 3 })
+    end,
+})
+
+Story:CreateButton({
+    Name     = "Join Farm Target Now",
+    Callback = function()
+        if #ss.farmMaps == 0 then
+            Rayfield:Notify({ Title = "Story Farm", Content = "No maps selected!", Duration = 3 })
+            return
+        end
+        local key = ss.farmMaps[ss.farmIdx] or ss.farmMaps[1]
+        joinStory(key, 1)
+        Rayfield:Notify({ Title = "Story Farm", Content = "Joining " .. getMapByKey(key).title, Duration = 3 })
+    end,
+})
+
+Story:CreateSection("Story Farm Status")
+local sLabel1 = Story:CreateLabel("State: Idle")
+local sLabel2 = Story:CreateLabel("Maps: —")
+local sLabel3 = Story:CreateLabel("Target Clears: —")
+local sLabel4 = Story:CreateLabel("Est. Gems Today: —")
+
+-- ── Heartbeat loops ─────────────────────────────────────────
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+
+    -- Auto Join single
+    if ss.autoJoin and (now - ss.lastJoin) >= ss.joinDelay then
+        local key = ss.useHighest and getHighestUnlocked().key or ss.mapKey
+        joinStory(key, ss.stage)
+        ss.lastJoin = now
+    end
+
+    -- Auto Farm
+    if ss.autoFarm and #ss.farmMaps > 0 then
+        local curKey = ss.farmMaps[ss.farmIdx]
+        if not curKey then
+            ss.autoFarm = false
+            pcall(function() sLabel1:Set("State: Done ✅") end)
+            return
+        end
+
+        ss.farmCleared[curKey] = ss.farmCleared[curKey] or 0
+
+        if ss.farmCleared[curKey] >= ss.farmClears then
+            ss.farmIdx = ss.farmIdx + 1
+            curKey = ss.farmMaps[ss.farmIdx]
+            if not curKey then
+                ss.autoFarm = false
+                pcall(function() sLabel1:Set("State: Done ✅") end)
+                return
+            end
+            ss.farmCleared[curKey] = ss.farmCleared[curKey] or 0
+        end
+
+        if (now - ss.farmLastJoin) >= ss.joinDelay then
+            joinStory(curKey, 1)
+            ss.farmLastJoin = now
+            ss.farmCleared[curKey] = ss.farmCleared[curKey] + 1
+            ss.todayPlays = ss.todayPlays + 1
+        end
+
+        local mapStr = {}
+        for _, k in ipairs(ss.farmMaps) do
+            local c = ss.farmCleared[k] or 0
+            table.insert(mapStr, getMapByKey(k).title .. " " .. c .. "/" .. ss.farmClears)
+        end
+
+        local totalGems = 0
+        for i = 1, ss.todayPlays do totalGems = totalGems + gemsForPlay(i) end
+
+        pcall(function() sLabel1:Set("State: Farming → " .. getMapByKey(curKey).title) end)
+        pcall(function() sLabel2:Set("Maps: " .. table.concat(mapStr, " | ")) end)
+        pcall(function() sLabel3:Set("Target: " .. ss.farmClears .. " clears/map") end)
+        pcall(function() sLabel4:Set("Est. Gems Today: ~" .. totalGems) end)
+    else
+        if not ss.autoFarm then
+            pcall(function() sLabel1:Set("State: Idle") end)
+            pcall(function() sLabel2:Set("Maps: —") end)
+            pcall(function() sLabel3:Set("Target Clears: —") end)
+            pcall(function() sLabel4:Set("Est. Gems Today: —") end)
+        end
+    end
+end)
+
+-- ============================================================
+-- SUMMON TAB
+-- ============================================================
+local Summon = Window:CreateTab("Summon", "sparkles")
+Summon:CreateSection("Summon Info")
+Summon:CreateLabel("Summons: " .. profile.Stats.Summons.Value)
+Summon:CreateLabel("Summon Tickets: " .. getItemCount("SummonTicket"))
+Summon:CreateSection("Auto Summon")
+Summon:CreateButton({ Name = "Coming Soon", Callback = function() end })
+
+-- ============================================================
+-- UNIT TAB
+-- ============================================================
+local Unit = Window:CreateTab("Unit", "sword")
+Unit:CreateSection("Equipped Units")
+local equippedNames = {}
+for _, u in ipairs(equipped:GetChildren()) do table.insert(equippedNames, u.Name) end
+Unit:CreateLabel(#equippedNames > 0 and table.concat(equippedNames, ", ") or "None")
+Unit:CreateSection("Inventory")
+Unit:CreateLabel("Total Units: " .. #profile.Inventory.Units:GetChildren())
+Unit:CreateLabel("Unit Limit: " .. profile.InventoryLimits.Units.Value)
+
+-- ============================================================
+-- DUNGEON TAB
+-- ============================================================
+local Dungeon = Window:CreateTab("Dungeon", "shield")
+Dungeon:CreateSection("Dungeon Info")
+Dungeon:CreateLabel("Dungeon Entries: " .. profile.Quests.DungeonEntries.Value)
+Dungeon:CreateSection("Auto Dungeon")
+Dungeon:CreateButton({ Name = "Coming Soon", Callback = function() end })
+
+-- ============================================================
+-- EVENT TAB
+-- ============================================================
+local Event = Window:CreateTab("Event", "star")
+Event:CreateSection("Event")
+Event:CreateButton({ Name = "Coming Soon", Callback = function() end })
+
+-- ============================================================
+-- GAME TAB
+-- ============================================================
+local Game = Window:CreateTab("Game", "gamepad-2")
+Game:CreateSection("Anti-AFK")
+Game:CreateToggle({
+    Name         = "Anti-AFK",
+    CurrentValue = false,
+    Flag         = "AntiAFK",
+    Callback     = function(val)
+        ANTI_AFK = val
+        Rayfield:Notify({ Title = "Anti-AFK", Content = val and "Enabled" or "Disabled", Duration = 3 })
+    end,
+})
+Game:CreateSection("Server")
+Game:CreateButton({
+    Name     = "Rejoin Server",
+    Callback = function()
+        game:GetService("TeleportService"):Teleport(game.PlaceId, LP)
+    end,
+})
+
+-- ============================================================
+-- PVP TAB
+-- ============================================================
+local PvP = Window:CreateTab("PvP", "swords")
+PvP:CreateSection("PvP Status")
+PvP:CreateLabel("PvP Enabled: " .. tostring(profile.Settings.PVPEnabled.Value))
+PvP:CreateLabel("PvP Tokens: " .. currencies.PVPTokens.Value)
+PvP:CreateLabel("Weekly PvP Score: " .. profile.Quests.WeeklyPVPScore.Value)
+PvP:CreateLabel("Daily PvP Score: " .. profile.Quests.DailyPVPScore.Value)
+PvP:CreateSection("Low Pop Finder")
+
+local MIN_PLAYERS = 1
+local MAX_PLAYERS = 5
+
+PvP:CreateSlider({
+    Name = "Min Players", Range = {1, 20}, Increment = 1, CurrentValue = 1, Flag = "MinPlayers",
+    Callback = function(val) MIN_PLAYERS = val end,
+})
+PvP:CreateSlider({
+    Name = "Max Players", Range = {1, 20}, Increment = 1, CurrentValue = 5, Flag = "MaxPlayers",
+    Callback = function(val) MAX_PLAYERS = val end,
+})
+PvP:CreateButton({
+    Name     = "Hop Low Pop Server",
+    Callback = function()
+        local ok, res = pcall(function()
+            return HttpService:JSONDecode(game:HttpGet(
+                "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+            ))
+        end)
+        if ok and res and res.data then
+            local servers = {}
+            for _, s in ipairs(res.data) do
+                local pop = s.playing or 0
+                if pop >= MIN_PLAYERS and pop <= MAX_PLAYERS and s.id ~= game.JobId then
+                    table.insert(servers, s)
+                end
+            end
+            if #servers > 0 then
+                game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)].id)
+            else
+                Rayfield:Notify({ Title = "Low Pop Finder", Content = "No servers found in range.", Duration = 4 })
+            end
+        else
+            Rayfield:Notify({ Title = "Low Pop Finder", Content = "Failed to fetch servers.", Duration = 4 })
+        end
+    end,
+})
+
+-- ============================================================
+-- MISC TAB
+-- ============================================================
+local Misc = Window:CreateTab("Misc", "wrench")
+Misc:CreateSection("Player Info")
+Misc:CreateLabel("Username: " .. LP.Name)
+Misc:CreateLabel("Level: " .. leaderstats.Level.Value)
+Misc:CreateLabel("Coins: " .. fmtNum(currencies.Coins.Value))
+Misc:CreateLabel("Gems: " .. fmtNum(currencies.Gems.Value))
+Misc:CreateLabel("Summon Tickets: " .. getItemCount("SummonTicket"))
+Misc:CreateLabel("Trait Rerolls: " .. getItemCount("TraitReroll"))
+Misc:CreateLabel("Sessions: " .. profile.Sessions.Value)
+Misc:CreateSection("Credits")
+Misc:CreateLabel("October Hub — Made for Summon Heroes")
+
+-- ============================================================
+-- WEBHOOK TAB
+-- ============================================================
+local Webhook = Window:CreateTab("Webhook", "webhook")
+Webhook:CreateSection("Webhook Config")
+Webhook:CreateInput({
+    Name                     = "Webhook URL",
+    PlaceholderText          = "https://discord.com/api/webhooks/...",
+    RemoveTextAfterFocusLost = false,
+    Flag                     = "WebhookURL",
+    Callback                 = function(val) WEBHOOK_URL = val end,
+})
+Webhook:CreateSection("Automation")
+Webhook:CreateToggle({
+    Name         = "Auto Send Webhook",
+    CurrentValue = false,
+    Flag         = "WebhookToggle",
+    Callback     = function(val)
+        webhookActive = val
+        if val then
+            roundStart  = os.time()
+            statsBefore = snapshot()
+        end
+        Rayfield:Notify({ Title = "Webhook", Content = val and "Webhook active!" or "Disabled.", Duration = 3 })
+    end,
+})
+Webhook:CreateToggle({
+    Name         = "Auto Retry",
+    CurrentValue = false,
+    Flag         = "AutoRetry",
+    Callback     = function(val)
+        AUTO_RETRY = val
+        Rayfield:Notify({ Title = "Auto Retry", Content = val and "Enabled" or "Disabled", Duration = 3 })
+    end,
+})
+Webhook:CreateSection("Status")
+Webhook:CreateLabel("GameOver Remote: Connected ✓")
+
+-- ============================================================
+-- SETTINGS TAB
+-- ============================================================
+local Settings = Window:CreateTab("Settings", "settings")
+Settings:CreateSection("Hub Settings")
+Settings:CreateKeybind({
+    Name           = "Toggle Hub",
+    CurrentKeybind = "RightShift",
+    HoldToInteract = false,
+    Flag           = "ToggleHub",
+    Callback       = function() end,
+})
+Settings:CreateToggle({
+    Name         = "Show Notifications",
+    CurrentValue = true,
+    Flag         = "ShowNotifs",
+    Callback     = function() end,
+})
+Settings:CreateSection("Danger Zone")
+Settings:CreateButton({
+    Name     = "Destroy Hub",
+    Callback = function() Rayfield:Destroy() end,
+})
+
+-- ============================================================
+-- FINALIZE
+-- ============================================================
+Rayfield:LoadConfiguration()
+
+Rayfield:Notify({
+    Title    = "October Hub",
+    Content  = "Loaded for " .. LP.Name .. " | Level " .. leaderstats.Level.Value,
+    Duration = 5,
+})
