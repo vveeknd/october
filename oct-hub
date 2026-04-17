@@ -187,7 +187,6 @@ local Window = Rayfield:CreateWindow({
 -- STORY TAB
 -- ============================================================
 
--- Map data (sourced from WaveData module)
 local MAPS = {
     { key = "RookieIsland",     title = "Rookie Island",      stages = 3 },
     { key = "VolcanoFortress",  title = "Volcano Fortress",   stages = 4 },
@@ -232,16 +231,48 @@ local function getHighestUnlocked()
     return best
 end
 
+-- Core join function using LaunchQueue remote + queue Model
 local function joinStory(mapKey, stageNum)
-    local ok, Queue = pcall(require, RS.Systems.Queue)
-    if ok then pcall(function() Queue.JoinStory(mapKey, stageNum) end) end
-    local ok2, Waves = pcall(require, RS.Systems.Waves)
-    if ok2 then pcall(function() Waves.StartStory(mapKey, stageNum) end) end
+    local queues = workspace:WaitForChild("LobbyMap"):WaitForChild("Queues")
+    local launchQueue = RS.Systems.Queue.LaunchQueue
+
+    -- Find our assigned queue Model
+    local myQueue = nil
+    for _, v in ipairs(queues:GetChildren()) do
+        if v:IsA("Model") and v:GetAttribute("OwnerName") == LP.Name then
+            myQueue = v
+            break
+        end
+    end
+
+    if not myQueue then
+        Rayfield:Notify({
+            Title    = "Story",
+            Content  = "Walk into the Story zone first!",
+            Duration = 4,
+        })
+        return false
+    end
+
+    -- Set map and stage on the queue Model then fire
+    myQueue:SetAttribute("Map",   mapKey)
+    myQueue:SetAttribute("Stage", stageNum)
+    launchQueue:FireServer(myQueue)
+    return true
 end
 
 local function leaveStory()
-    pcall(function() require(RS.Systems.Queue).Leave() end)
-    pcall(function() require(RS.Systems.Waves).Leave() end)
+    pcall(function()
+        local queues = workspace.LobbyMap.Queues
+        for _, v in ipairs(queues:GetChildren()) do
+            if v:IsA("Model") and v:GetAttribute("OwnerName") == LP.Name then
+                RS.Systems.Queue.LeaveQueue:FireServer(v)
+                break
+            end
+        end
+    end)
+    -- Fallback remotes
+    pcall(function() RS.Systems.Queue.Leave:FireServer() end)
 end
 
 -- Story state
@@ -330,12 +361,14 @@ Story:CreateButton({
     Name     = "Join Selected Story Now",
     Callback = function()
         local key = ss.useHighest and getHighestUnlocked().key or ss.mapKey
-        joinStory(key, ss.stage)
-        Rayfield:Notify({
-            Title   = "Story",
-            Content = "Joining " .. getMapByKey(key).title .. " Stage " .. ss.stage,
-            Duration = 3,
-        })
+        local ok = joinStory(key, ss.stage)
+        if ok then
+            Rayfield:Notify({
+                Title   = "Story",
+                Content = "Joining " .. getMapByKey(key).title .. " Stage " .. ss.stage,
+                Duration = 3,
+            })
+        end
     end,
 })
 
@@ -406,8 +439,10 @@ Story:CreateButton({
             return
         end
         local key = ss.farmMaps[ss.farmIdx] or ss.farmMaps[1]
-        joinStory(key, 1)
-        Rayfield:Notify({ Title = "Story Farm", Content = "Joining " .. getMapByKey(key).title, Duration = 3 })
+        local ok = joinStory(key, 1)
+        if ok then
+            Rayfield:Notify({ Title = "Story Farm", Content = "Joining " .. getMapByKey(key).title, Duration = 3 })
+        end
     end,
 })
 
