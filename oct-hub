@@ -295,13 +295,22 @@ local function joinStory(mapKey, stageNum, statusCb)
         return false
     end
 
-    status("Setting map: " .. getMapByKey(mapKey).title .. " Stage " .. stageNum)
-    myQueue:SetAttribute("Map",   mapKey)
-    myQueue:SetAttribute("Stage", stageNum)
-    task.wait(0.3)
+    -- Click MapSelect StartButton to show Launcher (client-side UI step)
+    pcall(function()
+        local startBtn = PlayerGui.MapSelect.Container.Frame.Contents.Buttons.StartButton
+        local conn
+        conn = startBtn.MouseButton1Click:Connect(function() conn:Disconnect() end)
+        local vum = game:GetService("VirtualInputManager")
+        local pos = startBtn.AbsolutePosition + startBtn.AbsoluteSize / 2
+        vum:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+        task.wait(0.05)
+        vum:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+    end)
 
-    status("Launching...")
-    RS.Systems.Queue.LaunchQueue:FireServer(myQueue)
+    task.wait(0.5)
+
+    status("Launching: " .. getMapByKey(mapKey).title .. " Stage " .. stageNum)
+    RS.Systems.Queue.SetQueue:FireServer(myQueue, mapKey, stageNum)
     return true
 end
 
